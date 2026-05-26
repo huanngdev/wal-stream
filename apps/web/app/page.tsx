@@ -108,6 +108,7 @@ export default function Page() {
                 totalChunks={result.total_chunks}
                 sessionId={result.session_id}
                 elapsedMs={result.elapsed_ms}
+                walrusAggregator={result.walrus_aggregator}
               />
 
               <Button variant="outline" onClick={() => reset()}>

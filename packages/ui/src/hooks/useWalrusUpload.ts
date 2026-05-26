@@ -29,7 +29,8 @@ async function transcodeVideo(
 
 export function useWalrusUpload(baseUrl: string) {
   return useMutation({
-    mutationFn: (args: { file: File; chunkSeconds: number; mode: "encode" | "copy" }) =>
-      transcodeVideo(baseUrl, args),
+    mutationFn: (
+      args: { file: File; chunkSeconds: number; mode: "encode" | "copy" },
+    ) => transcodeVideo(baseUrl, args),
   })
 }

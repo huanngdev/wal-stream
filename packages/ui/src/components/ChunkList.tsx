@@ -3,6 +3,8 @@
 import type { ChunkInfo } from "@workspace/shared/types"
 import {
   Clock,
+  Cloud,
+  ExternalLink,
   Film,
   File,
   Gauge,
@@ -16,6 +18,7 @@ import {
   CardTitle,
 } from "@workspace/ui/components/card"
 import { Badge } from "@workspace/ui/components/badge"
+import { Button } from "@workspace/ui/components/button"
 import {
   Table,
   TableBody,
@@ -32,6 +35,7 @@ interface ChunkListProps {
   totalChunks: number
   sessionId: string
   elapsedMs: number
+  walrusAggregator?: string
 }
 
 export function ChunkList({
@@ -41,6 +45,7 @@ export function ChunkList({
   totalChunks,
   sessionId,
   elapsedMs,
+  walrusAggregator,
 }: ChunkListProps) {
   const formatSize = (bytes: number) => {
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
@@ -54,6 +59,13 @@ export function ChunkList({
     const s = (ms / 1000).toFixed(1)
     return `${s}s`
   }
+
+  const hasBlobs = chunks.some((c) => c.blob_id)
+
+  const getViewUrl = (blobId: string) =>
+    walrusAggregator
+      ? `${walrusAggregator}/v1/blobs/${blobId}`
+      : `https://aggregator.walrus-testnet.walrus.space/v1/blobs/${blobId}`
 
   return (
     <div className="w-full space-y-6">
@@ -129,6 +141,50 @@ export function ChunkList({
         </Card>
       </div>
 
+      {hasBlobs && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Cloud />
+              Walrus Blobs
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2">
+            {chunks.map((chunk) =>
+              chunk.blob_id ? (
+                <div
+                  key={chunk.index}
+                  className="flex items-center justify-between rounded-md border bg-muted/20 px-3 py-2"
+                >
+                  <span className="flex items-center gap-2 font-mono text-xs">
+                    <span className="text-muted-foreground">
+                      #{chunk.index}
+                    </span>
+                    <span className="truncate max-w-64">
+                      {chunk.blob_id}
+                    </span>
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <Badge variant="secondary" className="font-mono text-[10px]">
+                      {formatSize(chunk.size_bytes)}
+                    </Badge>
+                    <a
+                      href={getViewUrl(chunk.blob_id)}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <Button variant="ghost" size="icon-sm" type="button">
+                        <ExternalLink />
+                      </Button>
+                    </a>
+                  </div>
+                </div>
+              ) : null,
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       <div className="space-y-2">
         <div className="flex items-center gap-2">
           <h3 className="text-sm font-medium">Chunk Details</h3>
@@ -144,6 +200,7 @@ export function ChunkList({
               <TableHead>Filename</TableHead>
               <TableHead className="text-right">Size</TableHead>
               <TableHead className="text-right">Duration</TableHead>
+              <TableHead className="w-12" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -163,6 +220,19 @@ export function ChunkList({
                 </TableCell>
                 <TableCell className="text-right tabular-nums text-muted-foreground">
                   ~{Math.round(chunk.duration_approx)}s
+                </TableCell>
+                <TableCell>
+                  {chunk.blob_id && (
+                    <a
+                      href={getViewUrl(chunk.blob_id)}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <Button variant="ghost" size="icon-sm" type="button">
+                        <ExternalLink className="size-3" />
+                      </Button>
+                    </a>
+                  )}
                 </TableCell>
               </TableRow>
             ))}

@@ -3,6 +3,8 @@ export interface ChunkInfo {
   filename: string
   size_bytes: number
   duration_approx: number
+  blob_id?: string
+  object_id?: string
 }
 
 export interface TranscodeResult {
@@ -12,4 +14,5 @@ export interface TranscodeResult {
   chunk_duration_secs: number
   chunks: ChunkInfo[]
   elapsed_ms: number
+  walrus_aggregator?: string
 }

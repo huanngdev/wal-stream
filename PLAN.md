@@ -6,20 +6,22 @@
 2. [Architecture](#2-architecture)
 3. [Tech Stack](#3-tech-stack)
 4. [MVP & Phasing](#4-mvp--phasing)
-5. [Phase 0: Prerequisites & Research](#5-phase-0-prerequisites--research)
-6. [Phase 1: Transcoding & Chunking Pipeline](#6-phase-1-transcoding--chunking-pipeline)
-7. [Phase 2: Encryption & Key Management](#7-phase-2-encryption--key-management)
-8. [Phase 3: Upload to Walrus](#8-phase-3-upload-to-walrus)
-9. [Phase 4: Manifest Format & Sui Pointer](#9-phase-4-manifest-format--sui-pointer)
-10. [Phase 5: Player SDK](#10-phase-5-player-sdk)
-11. [Phase 6: Aggregator Optimization](#11-phase-6-aggregator-optimization)
-12. [Phase 7: CDN & Edge Caching](#12-phase-7-cdn--edge-caching)
-13. [Phase 8: Access Control (Seal + Move)](#13-phase-8-access-control-seal--move)
-14. [Phase 9: Production Hardening](#14-phase-9-production-hardening)
-15. [Phase 10: Monitoring & Analytics](#15-phase-10-monitoring--analytics)
-16. [Deployment Topology](#16-deployment-topology)
-17. [Cost Model](#17-cost-model)
-18. [Risk Register](#18-risk-register)
+5. [P2P Transaction Model](#5-p2p-transaction-model)
+6. [Streaming Layer Design](#6-streaming-layer-design)
+7. [Phase 0: Prerequisites & Research](#7-phase-0-prerequisites--research)
+8. [Phase 1: Transcoding & Chunking Pipeline](#8-phase-1-transcoding--chunking-pipeline)
+9. [Phase 2: Encryption & Key Management](#9-phase-2-encryption--key-management)
+10. [Phase 3: Upload to Walrus](#10-phase-3-upload-to-walrus)
+11. [Phase 4: Manifest Format & Sui Pointer](#11-phase-4-manifest-format--sui-pointer)
+12. [Phase 5: Player SDK](#12-phase-5-player-sdk)
+13. [Phase 6: Aggregator Optimization](#13-phase-6-aggregator-optimization)
+14. [Phase 7: CDN & Edge Caching](#14-phase-7-cdn--edge-caching)
+15. [Phase 8: Access Control (Seal + Move)](#15-phase-8-access-control-seal--move)
+16. [Phase 9: Production Hardening](#16-phase-9-production-hardening)
+17. [Phase 10: Monitoring & Analytics](#17-phase-10-monitoring--analytics)
+18. [Deployment Topology](#18-deployment-topology)
+19. [Cost Model](#19-cost-model)
+20. [Risk Register](#20-risk-register)
 
 ---
 
@@ -27,7 +29,7 @@
 
 ### What we are building
 
-A video streaming layer on top of Walrus (decentralized blob storage) + Seal (decentralized encryption/access control) + Sui (blockchain coordination). Built as a **Turborepo monorepo** — Next.js/TypeScript for the web platform, Rust for performance-critical transcoding/upload, and Move for onchain contracts. Users upload a video file via the web platform, viewers stream it on-demand with adaptive bitrate, access-controlled via onchain policies.
+A video streaming layer on top of Walrus (decentralized blob storage) + Seal (decentralized encryption/access control) + Sui (blockchain coordination). Built as a **Turborepo monorepo** — Next.js/TypeScript for the web platform, Rust for performance-critical transcoding, and Move for onchain contracts. **P2P payment model:** users pay their own Walrus storage fees via Sui wallet. The platform only provides transcoding — zero storage costs.
 
 ### Constraints we design around
 
@@ -54,31 +56,49 @@ A video streaming layer on top of Walrus (decentralized blob storage) + Seal (de
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         UPLOAD PATH                              │
+│                         UPLOAD PATH (P2P)                        │
 │                                                                   │
-│  ┌──────────────┐    ┌──────────────────┐    ┌──────────────────┐   │
-│  │  Next.js App  │───▶│  Transcode       │───▶│  Encrypt &       │   │
-│  │  (Upload UI)  │    │  Server (Rust)   │    │  Upload Service   │   │
-│  └──────────────┘    └──────────────────┘    └────────┬─────────┘   │
-│                                                    │              │
-│               ┌────────────────────────────────────┼──────┐      │
-│               │  Walrus Network                    │      │      │
-│               │  ┌────┐ ┌────┐ ┌────┐             │      │      │
-│               │  │Node│ │Node│ │Node│ ...          │      │      │
-│               │  └────┘ └────┘ └────┘             │      │      │
-│               │    Segment blobs (encrypted)       │      │      │
-│               └────────────────────────────────────┼──────┘      │
-│                                                    │              │
-│  ┌──────────────────┐    ┌─────────────────────────┼──────┐      │
-│  │  Sui Blockchain  │    │  Manifest Blob (Walrus)  │      │      │
-│  │                  │    │  ┌──────────────────┐    │      │      │
-│  │  VideoPointer    │◀───│  │ playlist +       │◀───┘      │      │
-│  │  Object          │    │  │ encrypted VEK    │            │      │
-│  │  - manifestBlobId│    │  │ per-segment IVs  │            │      │
-│  │  - owner         │    │  │ access policy    │            │      │
-│  │  - title         │    │  └──────────────────┘            │      │
-│  │  - thumbnailId   │    └──────────────────────────────────┘      │
-│  └──────────────────┘                                              │
+│  ┌──────────────┐    ┌──────────────────┐                       │
+│  │  Next.js App  │───▶│  Rust Transcoder │                       │
+│  │  (Upload UI)  │    │  (ffmpeg)        │                       │
+│  └──────┬───────┘    └────────┬─────────┘                       │
+│         │  file POST          │  chunked fMP4 files             │
+│         │                     │  + manifest JSON                │
+│         ◀─────────────────────┘                                  │
+│         │                                                        │
+│         │  ┌──────────────────────────┐                          │
+│         │  │ Upload via @mysten/walrus│                          │
+│         │  │ + connected Sui wallet   │                          │
+│         │  │                          │                          │
+│         │  │  1. Upload chunk data    │──────┐                   │
+│         │  │     (to Walrus publisher)│      │                   │
+│         │  │  2. Build batch PTB      │      │                   │
+│         │  │  3. User signs 1 tx ─────│──────┼────┐              │
+│         │  └──────────────────────────┘      │    │              │
+│         │                                     │    │              │
+│  ┌──────┴─────────────────────────────────────┼────┼──────┐      │
+│  │  Walrus Network  +  Sui Blockchain         │    │      │      │
+│  │                                            │    │      │      │
+│  │  ┌────────┐ ┌────────┐ ┌────────┐         ▼    ▼      │      │
+│  │  │ Node 1 │ │ Node 2 │ │ Node 3 │  ...    │    │      │      │
+│  │  └────────┘ └────────┘ └────────┘          │    │      │      │
+│  │    Chunk blobs (raw fMP4, no encryption)    │    │      │      │
+│  │                                             │    │      │      │
+│  │  ┌──────────────────────────────────────┐   │    │      │      │
+│  │  │  Sui: register_video PTB             │◀──┘    │      │      │
+│  │  │  - registers N chunk blob IDs        │        │      │      │
+│  │  │  - registers manifest blob ID        │        │      │      │
+│  │  │  - deducts SUI from user             │        │      │      │
+│  │  │  - emits VideoPointer {              │        │      │      │
+│  │  │      owner,                          │        │      │      │
+│  │  │      manifestBlobId,                 │◀───────┘      │      │
+│  │  │      title, thumbnailBlobId          │                │      │
+│  │  │    }                                 │                │      │
+│  │  └──────────────────────────────────────┘                │      │
+│  └──────────────────────────────────────────────────────────┘      │
+│                                                                   │
+│  Platform cost: ZERO SUI (only compute for transcoding)           │
+│  User cost: 1 Sui tx (batch register all blobs)                   │
 └─────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐
@@ -88,44 +108,55 @@ A video streaming layer on top of Walrus (decentralized blob storage) + Seal (de
 │  │  Viewer  │                                                    │
 │  │  Browser │                                                    │
 │  └────┬─────┘                                                    │
-│       │                                                           │
-│  ┌────▼─────────────┐     ┌──────────────────┐                  │
-│  │  Player SDK      │────▶│  Seal Key Server │ (ONE call)      │
-│  │  - fetch manifest│     │  decrypt VEK     │                  │
-│  │  - get VEK       │     └──────────────────┘                  │
-│  │  - decrypt segs  │                                            │
-│  │  - ABR logic     │                                            │
-│  │  - buffer mgmt   │                                            │
-│  └────┬─────────────┘                                            │
-│       │                                                           │
-│       │  fetch segment blobs (sequential + prefetch)             │
-│       ▼                                                           │
-│  ┌──────────────────────┐     ┌──────────────────────┐          │
-│  │  Aggregator / CDN    │────▶│  Walrus Storage      │          │
-│  │  (caches hot segs)   │     │  Nodes               │          │
-│  └──────────────────────┘     └──────────────────────┘          │
+│       │  GET /watch/{videoId}                                    │
+│       ▼                                                          │
+│  ┌────────────────────────┐     ┌──────────────────┐            │
+│  │  Next.js Watch Page    │────▶│  Sui RPC         │            │
+│  │  (inline player logic) │     │  get VideoPointer│            │
+│  └────┬───────────────────┘     │  → manifestBlobId│            │
+│       │                         └──────────────────┘            │
+│       │                                                          │
+│  ┌────▼───────────────────┐                                     │
+│  │  Player Engine (MSE)   │                                     │
+│  │  - fetch manifest blob │──── FREE READ (no SUI needed) ──┐   │
+│  │  - parse chunk list    │                                  │   │
+│  │  - fetch init blob     │                                  │   │
+│  │  - fetch chunk 0 blob  │                                  │   │
+│  │  - MSE → <video>       │                                  │   │
+│  │  - prefetch N+1, N+2   │                                  │   │
+│  │  - seek → fetch target │                                  │   │
+│  └────┬───────────────────┘                                  │   │
+│       │                                                       │   │
+│       │  ALL READS are free (Walrus aggregator)              │   │
+│       ▼                                                       ▼   │
+│  ┌──────────────────────┐     ┌──────────────────────┐           │
+│  │  Aggregator / CDN    │────▶│  Walrus Storage      │           │
+│  │  (caches blob reads) │     │  Nodes               │           │
+│  └──────────────────────┘     └──────────────────────┘           │
 │                                                                   │
 │  ┌──────────────────────┐                                        │
-│  │  HTML <video> + MSE  │  ← decrypted segments fed here        │
+│  │  HTML <video> + MSE  │  ← chunks fed via SourceBuffer        │
 │  └──────────────────────┘                                        │
+│                                                                   │
+│  Viewer cost: ZERO (reads are free)                              │
+│  Only the uploader pays.                                         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Data flow summary
 
 ```
-Upload:   Next.js UI → API route → Rust transcoder → ffmpeg
-          → N segments × M qualities
-          → (v0.2) AES-256 encrypt each segment (1 VEK)
-          → Upload segments to Walrus (parallel, Rust service)
-          → Build manifest + (v0.2) encrypt VEK with Seal
-          → Upload manifest to Walrus
-          → Create Sui VideoPointer object
+Upload:   Next.js UI → user connects Sui wallet
+          → file POST to Rust transcoder → ffmpeg → chunked fMP4
+          → chunks returned to browser
+          → browser signs 1 Sui tx (batch-registers all chunks + manifest)
+          → blob data uploaded to Walrus (browser → Walrus publisher)
+          → VideoPointer created on Sui (owned by user)
 
 Playback: Next.js watch page → Sui pointer → manifest blob
-          → (v0.2) Seal SDK (1 call) → VEK in memory
-          → Loop: fetch segment blob → (v0.2) AES decrypt → MSE → play
-          → (v0.3) ABR: adjust quality at segment boundaries
+          → extract chunk list
+          → Loop: fetch chunk blob (free read) → MSE → play
+          → (v0.3) ABR: switch quality at chunk boundaries
 ```
 
 ---
@@ -140,7 +171,7 @@ wal-stream/                          (Turborepo)
 │   ├── web/                         # Next.js — upload & streaming platform
 │   └── player-demo/                 # Standalone player test page
 ├── packages/
-│   ├── transcoder/                  # Rust — ffmpeg orchestration, encryption, upload
+│   ├── transcoder/                  # Rust — ffmpeg orchestration (no Walrus key — returns chunks to browser)
 │   ├── player-sdk/                  # TypeScript — @walrus/video-player
 │   ├── upload-sdk/                  # TypeScript — browser upload + client-side helpers
 │   ├── sui-contracts/               # Move — walrus_video package
@@ -153,11 +184,11 @@ wal-stream/                          (Turborepo)
 
 | Component | Language | Rationale |
 |-----------|----------|-----------|
-| Web platform (upload + watch) | Next.js + React + TypeScript | SSR, API routes, rich ecosystem |
-| Transcoding service | Rust | Performance-critical: ffmpeg orchestration, parallel encryption, Walrus upload |
-| Player SDK | TypeScript | Targets browser; lightweight and tree-shakeable |
-| Upload SDK | TypeScript | Client-side helpers for browser upload flow |
-| Move contracts | Sui Move | Onchain video pointer + access policies |
+| Web platform (upload + watch) | Next.js + React + TypeScript | SSR, API routes, Sui wallet integration, upload UI |
+| Transcoding service | Rust | Performance-critical: ffmpeg orchestration. Does NOT upload to Walrus — returns chunks to browser. |
+| Player SDK | TypeScript | Targets browser; chunk download, MSE pipeline, seek logic |
+| Upload SDK | TypeScript | Browser helpers: Walrus blob upload, PTB construction, wallet signing flow |
+| Move contracts | Sui Move | Batch blob registration, VideoPointer, access policies |
 | Job queue | Redis + BullMQ | Persistent queue for transcode jobs |
 
 ### Target networks
@@ -180,8 +211,11 @@ All code must be **mainnet-ready from day one**. We develop on testnet, but:
 ### v0.1 — Upload & Watch Platform (target: 6-8 weeks)
 
 **Scope:**
-- Web platform: upload a video → transcode → upload to Walrus → watch page
-- Single quality (1080p), no ABR, no encryption, no access control (public content)
+- Web platform: upload a video → transcode → user pays via Sui wallet → watch page
+- Single quality (1080p), no encryption, no access control (public content)
+- Chunk-based streaming (2-min chunks, ~60 blobs per video)
+- User signs **1 Sui transaction** (batch registers all chunks + manifest)
+- Platform pays zero storage fees
 - All data on Walrus Testnet (mainnet-configurable)
 - "Share link" that anyone can open and watch
 
@@ -195,10 +229,10 @@ All code must be **mainnet-ready from day one**. We develop on testnet, but:
 
 **Exit criteria:**
 - Upload 10-min 1080p video through web UI
-- Segments appear on Walrus Testnet
-- Watch page loads manifest, fetches segments to `<video>` via MSE
+- User connects Sui wallet, signs 1 transaction, chunks uploaded to Walrus Testnet
+- Watch page loads manifest, fetches chunks to `<video>` via MSE
 - Works in Chrome, Firefox, Safari
-- Time-to-first-frame < 5s on 50 Mbps connection
+- Time-to-first-frame < 15s on 50 Mbps connection (chunk download dominates)
 
 ### v0.2 — Encryption + Standalone SDK (target: +3-4 weeks)
 
@@ -216,7 +250,410 @@ All code must be **mainnet-ready from day one**. We develop on testnet, but:
 
 ---
 
-## 5. Phase 0: Prerequisites & Research
+## 5. P2P Transaction Model
+
+### Core principle
+
+The platform pays **zero** Walrus storage fees. Every cost is born by the user who uploads the video, via their own Sui wallet. The platform only provides compute (transcoding).
+
+### The problem with per-blob transactions
+
+A traditional HLS pipeline produces thousands of small segments. If each segment is a Walrus blob and each blob requires a Sui transaction, the user would need to sign thousands of wallet prompts. That's unacceptable UX.
+
+### Solution: Batch registration via Move contract
+
+Users sign **one** Sui transaction that registers all blobs for a video at once:
+
+```move
+// packages/sui-contracts/sources/batch_register.move
+
+struct Video has key {
+    id: UID,
+    owner: address,
+    blob_count: u64,
+    total_encoded_bytes: u64,
+}
+
+/// The user calls this ONCE — registers all video + manifest blobs in a single tx.
+/// All Walrus storage fees are deducted from the user's SUI in this one transaction.
+entry fun register_video(
+    blob_ids: vector<u256>,
+    blob_sizes: vector<u64>,
+    epochs: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    let count = blob_ids.length();
+    // register each blob with Walrus system contract
+    // total SUI deducted = sum of per-blob storage cost
+    // create VideoPointer object owned by ctx.sender()
+}
+```
+
+The Sui Programmable Transaction Block (PTB) allows batching multiple Walrus blob registrations into one atomic transaction. User sees one wallet popup, signs once, all blobs registered.
+
+### Transaction flow
+
+```
+1. Browser sends video → Rust transcoder (HTTP multipart)
+2. Rust transcoder processes:
+   ffmpeg → chunked fMP4 files (e.g., 24 chunks for 2-hour video)
+3. Transcoder returns chunk files + manifest JSON to browser
+4. Browser uses @mysten/walrus SDK to:
+   a. Upload chunk data to Walrus publisher (free — just data transfer)
+   b. Build a PTB that registers all blob IDs
+   c. User signs ONE PTB via Sui wallet extension
+   d. Walrus contract registers all blobs, deducts SUI from user
+5. Browser receives confirmed blob IDs
+6. Browser (or platform) creates VideoPointer on Sui (separate tx)
+```
+
+### Cost for user (approximate)
+
+```
+Example: 2-hour movie, 1080p, 8 Mbps
+Raw encoded: ~7.2 GB
+Walrus encoded (×4.5): ~32 GB
+Chunk count: 24 (5-minute chunks, ~300 MB each)
+Epochs: 12 (~6 months storage)
+
+User pays: 24 blob registrations × price_per_gb_epoch × epochs
+         + 1 manifest blob registration
+         + ~1-2 SUI gas for the PTB
+
+All in one wallet prompt. Platform pays zero.
+```
+
+---
+
+## 6. Streaming Layer Design
+
+### The fundamental constraint
+
+Walrus blobs are **all-or-nothing reads**. You cannot request bytes 1000-5000 of a blob — you get the entire blob or nothing. Traditional HLS/DASH uses 2-10 second segments with byte-range requests, but that's impossible on Walrus.
+
+### Chunking strategy
+
+Instead of 5-second HLS segments, produce **2-5 minute chunks** with forced keyframes at chunk boundaries:
+
+```bash
+ffmpeg -i input.mp4 \
+  -c:v libx264 -b:v 8M -c:a aac -b:a 128k \
+  -force_key_frames "expr:gte(t,n_forced*300)" \
+  -f segment -segment_time 300 \
+  -segment_format mp4 \
+  -reset_timestamps 1 \
+  chunk_%03d.mp4
+```
+
+```
+Output for 2-hour movie at 1080p:
+chunk_001.mp4  (~300 MB, 5 min)
+chunk_002.mp4  (~300 MB, 5 min)
+...
+chunk_024.mp4  (~300 MB, 5 min)
+init.mp4       (~2 KB, codec initialization)
+```
+
+Each chunk:
+- Starts with a keyframe (independently decodable)
+- Is a valid fMP4 with its own moov/moof atoms
+- Can be appended to MSE SourceBuffer in sequence
+
+### Manifest format
+
+```json
+{
+  "version": 1,
+  "duration": 7200,
+  "chunkDuration": 300,
+  "initBlobId": "0xabc123...",
+  "renditions": [
+    {
+      "name": "1080p",
+      "width": 1920,
+      "height": 1080,
+      "bandwidth": 8000000,
+      "codec": "avc1.64002A,mp4a.40.2",
+      "chunks": [
+        { "index": 0, "blobId": "0x...", "duration": 300, "byteSize": 314572800 },
+        { "index": 1, "blobId": "0x...", "duration": 300, "byteSize": 308019200 },
+        { "index": 2, "blobId": "0x...", "duration": 300, "byteSize": 311427072 }
+        // ... up to index 23
+      ]
+    }
+  ]
+}
+```
+
+The manifest is a Walrus blob (user pays for it in the batch tx). It's small (~5-10 KB), so it downloads in <100ms.
+
+### Player: download → decode → play pipeline
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                        PLAYER PIPELINE                             │
+│                                                                    │
+│  BOOTSTRAP (cold start, ~200ms)                                    │
+│  ┌───────────────────────────────────────────────────────────┐   │
+│  │ 1. Fetch manifest blob   (aggregator, free read, ~5 KB)   │   │
+│  │ 2. Parse → initBlobId + chunk[0..N] list                  │   │
+│  │ 3. Fetch init blob       (aggregator, free read, ~2 KB)   │   │
+│  │ 4. Create MediaSource, add SourceBuffer with init segment │   │
+│  └───────────────────────────────────────────────────────────┘   │
+│                           │                                        │
+│                           ▼                                        │
+│  FIRST CHUNK (buffering, depends on connection)                    │
+│  ┌───────────────────────────────────────────────────────────┐   │
+│  │ 5. Fetch chunk 0 blob   (aggregator → ~300 MB)            │   │
+│  │    ├─ 100 Mbps → ~24s                                     │   │
+│  │    ├─ 300 Mbps → ~8s                                      │   │
+│  │    └─ 1 Gbps   → ~2.4s                                    │   │
+│  │ 6. sb.appendBuffer(chunk0_arraybuffer)                     │   │
+│  │ 7. Wait for 'updateend' event                              │   │
+│  │ 8. video.play()  ← playback starts                         │   │
+│  └───────────────────────────────────────────────────────────┘   │
+│                           │                                        │
+│                           ▼                                        │
+│  STEADY STATE (play while downloading)                             │
+│  ┌───────────────────────────────────────────────────────────┐   │
+│  │ While chunk N is playing:                                  │   │
+│  │   ├─ Prefetch chunk N+1 (background fetch)                 │   │
+│  │   ├─ Prefetch chunk N+2 (second priority)                  │   │
+│  │   ├─ On 'timeupdate' near chunk boundary → append N+1     │   │
+│  │   └─ Evict chunks < currentTime - 60s from SourceBuffer   │   │
+│  │                                                             │   │
+│  │  Buffer window: 3 chunks ahead (~15 min)                   │   │
+│  │  Memory usage:  ~4 chunks × 300 MB = 1.2 GB RAM            │   │
+│  └───────────────────────────────────────────────────────────┘   │
+│                           │                                        │
+│                           ▼                                        │
+│  SEEK ROUTINE                                                      │
+│  ┌───────────────────────────────────────────────────────────┐   │
+│  │ 1. targetChunk = floor(seekTime / chunkDuration)           │   │
+│  │ 2. sb.remove(0, Infinity)    // flush buffer               │   │
+│  │ 3. Cancel in-flight fetches                                │   │
+│  │ 4. Re-init SourceBuffer with init segment                  │   │
+│  │ 5. Fetch targetChunk blob                                  │   │
+│  │ 6. sb.appendBuffer(targetChunk)                            │   │
+│  │ 7. video.currentTime = seekTime                            │   │
+│  │ 8. video.play()                                            │   │
+│  │ 9. Prefetch targetChunk + 1                                │   │
+│  │                                                             │   │
+│  │  Tradeoff: seeking to middle of a 5-min chunk means         │   │
+│  │  downloading the full ~300 MB chunk. At 100 Mbps: ~24s.    │   │
+│  │  Acceptable for VOD (not acceptable for live sports).      │   │
+│  └───────────────────────────────────────────────────────────┘   │
+│                                                                    │
+│  ABR (v0.3)                                                        │
+│  ┌───────────────────────────────────────────────────────────┐   │
+│  │ At chunk boundary:                                          │   │
+│  │   1. Measure download time of last chunk → bandwidth est.   │   │
+│  │   2. bandwidth > nextHigher.bitrate * 1.3 → switch up      │   │
+│  │   3. bandwidth < current.bitrate * 0.7 → switch down       │   │
+│  │   4. Fetch next chunk at selected quality                   │   │
+│  │   5. Fetch init segment if switching to new quality         │   │
+│  └───────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### MSE integration in code
+
+```typescript
+class WalrusPlayer {
+  private mediaSource: MediaSource;
+  private sourceBuffer: SourceBuffer;
+  private chunks: ChunkInfo[];
+  private currentChunkIndex = 0;
+  private prefetchQueue: Map<number, Promise<ArrayBuffer>> = new Map();
+  private videoElement: HTMLVideoElement;
+
+  async bootstrap(manifestBlobId: string, aggregatorUrl: string) {
+    // 1. Fetch manifest
+    const manifest = await fetchManifest(manifestBlobId, aggregatorUrl);
+    this.chunks = manifest.renditions[0].chunks;
+
+    // 2. Fetch init segment
+    const init = await fetchBlob(manifest.initBlobId, aggregatorUrl);
+
+    // 3. Setup MSE
+    this.mediaSource = new MediaSource();
+    this.videoElement.src = URL.createObjectURL(this.mediaSource);
+
+    await new Promise<void>(resolve => {
+      this.mediaSource.addEventListener('sourceopen', () => {
+        this.sourceBuffer = this.mediaSource.addSourceBuffer(
+          'video/mp4; codecs="avc1.64002A,mp4a.40.2"'
+        );
+        this.sourceBuffer.addEventListener('updateend', resolve, { once: true });
+        this.sourceBuffer.appendBuffer(init);
+      }, { once: true });
+    });
+
+    // 4. Load first chunk
+    await this.loadChunk(0);
+    this.videoElement.play();
+
+    // 5. Start prefetch loop
+    this.videoElement.addEventListener('timeupdate', () => this.onTimeUpdate());
+    this.prefetchAhead(0);
+  }
+
+  private async loadChunk(index: number): Promise<void> {
+    const chunk = this.chunks[index];
+    if (!chunk) return;
+
+    const data = await fetchBlob(chunk.blobId, this.aggregatorUrl);
+    await new Promise<void>(resolve => {
+      this.sourceBuffer.addEventListener('updateend', resolve, { once: true });
+      this.sourceBuffer.appendBuffer(data);
+    });
+    this.currentChunkIndex = index;
+  }
+
+  private onTimeUpdate(): void {
+    const nextBoundary = (this.currentChunkIndex + 1) * CHUNK_DURATION;
+    const timeLeft = nextBoundary - this.videoElement.currentTime;
+
+    // 30s before chunk end: append next chunk
+    if (timeLeft < 30 && !this.isAppending) {
+      this.loadChunk(this.currentChunkIndex + 1);
+    }
+
+    // Evict old chunks
+    const buffered = this.sourceBuffer.buffered;
+    if (buffered.length > 0 && buffered.start(0) < this.videoElement.currentTime - 60) {
+      this.sourceBuffer.remove(0, this.videoElement.currentTime - 60);
+    }
+  }
+
+  private prefetchAhead(currentIndex: number): void {
+    for (let i = 1; i <= 3; i++) {
+      const idx = currentIndex + i;
+      if (idx < this.chunks.length && !this.prefetchQueue.has(idx)) {
+        this.prefetchQueue.set(idx, fetchBlob(this.chunks[idx].blobId, this.aggregatorUrl));
+      }
+    }
+  }
+
+  async seek(targetSeconds: number): Promise<void> {
+    const targetChunk = Math.floor(targetSeconds / CHUNK_DURATION);
+    // Flush and re-init
+    this.sourceBuffer.remove(0, Infinity);
+    await this.waitForUpdateEnd();
+    await this.loadChunk(targetChunk);
+    this.videoElement.currentTime = targetSeconds;
+    this.videoElement.play();
+    this.prefetchAhead(targetChunk);
+  }
+}
+```
+
+### Chunk size tradeoff
+
+| Chunk duration | Blob count (2h video) | Seek latency (100 Mbps) | First-frame latency | User transactions |
+|---------------|----------------------|------------------------|--------------------|--------------------|
+| 30s | 240 | ~9.6s | ~9.6s | 1 PTB (batch) |
+| 2min | 60 | ~19.2s | ~19.2s | 1 PTB (batch) |
+| 5min | 24 | ~24s | ~24s | 1 PTB (batch) |
+| 10min | 12 | ~48s | ~48s | 1 PTB (batch) |
+
+All options use **1 user transaction** (batch). The tradeoff is purely UX: longer chunks = fewer Walrus blobs to register = slightly cheaper (less overhead per blob), but slower seeks and longer first-frame buffering.
+
+**Recommendation for v0.1:** 2-minute chunks. Balanced between seek latency and blob count. For 1080p: ~60 chunks × 120 MB each = ~7.2 GB raw, ~1 user transaction.
+
+### Why this works on Walrus (and why HLS segment streaming doesn't)
+
+| | Traditional HLS | Walrus chunk approach |
+|---|---|---|
+| Segment size | 2-10 seconds | 2-5 minutes |
+| Blob count (2h) | 360-3600 | 24-60 |
+| Byte-range reads | Yes (HTTP Range) | No (all-or-nothing blob) |
+| User pays | Platform/server | User (1 PTB) |
+| Seek latency | <100ms (tiny segments) | 8-48s (full chunk download) |
+| Cacheable | CDN (immutable segments) | CDN (immutable blobs, but larger) |
+| Network waste on seek | None | Download full chunk even for 5s watch |
+
+### Quality selection (ABR) tradeoffs
+
+Chunk-based streaming fundamentally limits ABR responsiveness. With 5-second HLS segments you switch quality every 5 seconds. With 2-minute chunks you switch every 2 minutes. This has cascading effects:
+
+```
+Scenario: Viewer starts with good bandwidth, then it drops at t=30s
+
+Traditional HLS:
+  t=0s   Start at 1080p (segment 0, 5s)
+  t=5s   Still 1080p (segment 1, 5s)
+  t=10s  Still 1080p (segment 2, 5s)
+  t=30s  Bandwidth drops
+  t=35s  Switch to 720p (segment 7, 5s)        ← 5s reaction
+  t=40s  Switch to 480p (segment 8, 5s)         ← 10s reaction
+  Total wasted: ~15s of 1080p download after drop
+
+Chunk-based (2-min chunks):
+  t=0s   Start 1080p chunk 0 (120s, 300 MB)
+  t=30s  Bandwidth drops
+  t=120s Switch to 720p chunk 1                   ← 90s reaction!
+  Total wasted: ~90s of 1080p download after drop
+```
+
+**Mixed-quality within single chunk (v0.3+ optimization):**
+
+One way to mitigate: transcode each chunk at multiple qualities AND include a low-quality "insurance" copy at the start:
+
+```
+chunk_001.mp4 embeds:
+  ├─ 1080p track  (300 MB)
+  ├─ 720p track   (150 MB)
+  └─ 480p track   (80 MB)
+```
+
+Player downloads the full blob, can seamlessly switch tracks mid-chunk. Downside: blob size is the sum of all qualities (~530 MB per chunk). Upside: instant quality transitions, zero wasted download. Good for premium/paid content where fidelity matters.
+
+For v0.1 MVP: single quality only. ABR is a v0.3 concern. Users pick quality before watching (like YouTube's manual quality selector before auto was reliable).
+
+### CDN — do we need it?
+
+**Short answer: Not for v0.1. The Walrus aggregator is your CDN.**
+
+```
+Viewer → Walrus Aggregator → Walrus Storage Nodes (distributed)
+          │
+          ├─ Public endpoint (e.g., https://aggregator.walrus-testnet.walrus.space)
+          ├─ Fetches and decodes blobs from storage nodes
+          ├─ Already distributed (multiple aggregators exist)
+          └─ Free reads (no SUI cost to viewer or platform)
+```
+
+The aggregator already caches decoded blobs in memory. Since Walrus blobs are content-addressed and immutable, caching is trivial — same blobId = same content forever.
+
+**When you'd add a CDN (v0.3+):**
+
+| When | Why |
+|------|-----|
+| Global audience | Aggregators may be geo-limited; Cloudflare/Fastly edge POPs are everywhere |
+| Sub-second first-frame | Aggregator + Walrus storage nodes may have 200-500ms latency; CDN POP < 50ms |
+| DDoS / abuse protection | CDN includes WAF, rate limiting, bot detection |
+| Spike traffic (viral video) | Aggregator may throttle; CDN absorbs without hitting origin |
+| TLS termination | Aggregator might not provide HTTPS (testnet may be HTTP) |
+
+**Cache rules for CDN (if added later):**
+
+```
+Path                          Cache TTL          Reason
+───────────────────────────   ────────────────   ─────────────────────────
+/v1/blobs/{chunkBlobId}      Forever (immutable) Content-addressed, never changes
+/v1/blobs/{manifestBlobId}   1 hour             Purge on video update
+/v1/blobs/{thumbnailBlobId}  Forever             Immutable
+```
+
+Since blobs are content-addressed, a CDN is an ideal fit — zero cache invalidation complexity. But it's purely a latency/cost optimization, not a functional requirement.
+
+**For v0.1: skip CDN entirely.** Point the player directly at the Walrus testnet aggregator. If you later add a CDN, the player just changes one URL — no code changes.
+
+---
+
+## 7. Phase 0: Prerequisites & Research
 
 ### 3.1 E2E prototype on Testnet (week 1)
 
@@ -320,7 +757,7 @@ Every package gets a `dev` script configured in `turbo.json` pipelines:
 
 ---
 
-## 6. Phase 1: Transcoding & Chunking Pipeline
+## 8. Phase 1: Transcoding & Chunking Pipeline
 
 ### 4.1 Server setup
 
@@ -427,7 +864,7 @@ Steps:
 
 ---
 
-## 7. Phase 2: Encryption & Key Management
+## 9. Phase 2: Encryption & Key Management
 
 ### 5.1 Key hierarchy
 
@@ -514,7 +951,7 @@ ROTATION:  Not needed per-video. New video = new VEK.
 
 ---
 
-## 8. Phase 3: Upload to Walrus
+## 10. Phase 3: Upload to Walrus
 
 ### 6.1 Upload strategy
 
@@ -592,7 +1029,7 @@ After all segments uploaded:
 
 ---
 
-## 9. Phase 4: Manifest Format & Sui Pointer
+## 11. Phase 4: Manifest Format & Sui Pointer
 
 ### 7.1 Manifest schema
 
@@ -735,7 +1172,7 @@ Operations on this object:
 
 ---
 
-## 10. Phase 5: Player SDK
+## 12. Phase 5: Player SDK
 
 > **Milestone:** Player logic lives inline in the web app for v0.1. It is extracted into `@walrus/video-player` as a standalone package in v0.2. Full ABR, multi-quality support, and React/web-component builds ship in v0.3.
 
@@ -876,7 +1313,7 @@ Minimum target: latest 2 versions of each
 
 ---
 
-## 11. Phase 6: Aggregator Optimization
+## 13. Phase 6: Aggregator Optimization
 
 ### 9.1 Current Walrus aggregator behavior (research needed)
 
@@ -948,7 +1385,7 @@ Each aggregator:
 
 ---
 
-## 12. Phase 7: CDN & Edge Caching
+## 14. Phase 7: CDN & Edge Caching
 
 ### 10.1 Using Cloudflare / Fastly as CDN
 
@@ -988,7 +1425,7 @@ If CDN bandwidth costs are a concern, consider:
 
 ---
 
-## 13. Phase 8: Access Control (Seal + Move)
+## 15. Phase 8: Access Control (Seal + Move)
 
 ### 11.1 Policy types
 
@@ -1081,7 +1518,7 @@ Refresh:
 
 ---
 
-## 14. Phase 9: Production Hardening
+## 16. Phase 9: Production Hardening
 
 ### 12.1 Security checklist
 
@@ -1133,7 +1570,7 @@ Sui VideoPointer can be upgraded to `version: 2` with new fields via the Move up
 
 ---
 
-## 15. Phase 10: Monitoring & Analytics
+## 17. Phase 10: Monitoring & Analytics
 
 ### 13.1 Server-side metrics
 
@@ -1198,7 +1635,7 @@ NOT collected:
 
 ---
 
-## 16. Deployment Topology
+## 18. Deployment Topology
 
 ### 14.1 Production layout
 
@@ -1275,7 +1712,7 @@ Git Push → GitHub Actions
 
 ---
 
-## 17. Cost Model
+## 19. Cost Model
 
 ### 15.1 Infrastructure (monthly, approximate)
 
@@ -1297,7 +1734,7 @@ Example: 2-hour 4K movie, 5 qualities, 12 epochs (~6 months)
 
 Encoded data: ~200 GB
 Storage cost: 200 GB × price_per_gb_per_epoch × 12 epochs
-Write cost: one-time fee per blob × 7,200 segments + 1 manifest
+Write cost: one-time fee per blob × 60 chunks + 1 manifest (batch: 1 user tx)
 
 These are paid in SUI and depend on network conditions.
 ```
@@ -1312,7 +1749,7 @@ These are paid in SUI and depend on network conditions.
 
 ---
 
-## 18. Risk Register
+## 20. Risk Register
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
@@ -1367,16 +1804,18 @@ Total:   ~12-22 weeks (3-5 months)
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
+| Payment model | P2P — user pays Walrus via Sui wallet | Platform pays zero storage. 1 Sui tx per video (batch). |
+| Blob registration | Batch Move PTB | Single wallet prompt registers all chunks + manifest |
+| Chunk size | 2-5 minutes (balancing UX vs blob count) | Tradeoff: longer chunks = fewer blobs = cheaper, but slower seeks |
+| Chunk count (2h video) | ~24-60 chunks per quality | Fits in 1 Sui PB without hitting tx size limits |
 | Monorepo | Turborepo (pnpm) | Parallel builds, shared config, TS + Rust in one repo |
-| Web platform | Next.js + React + TypeScript | SSR, API routes, ecosystem |
-| Transcoding service | Rust | Performance-critical; ffmpeg orchestration + Walrus upload |
-| Player SDK | TypeScript (extracted from web app in v0.2) | Browser target, tree-shakeable |
-| Segment format | fMP4 (CMAF) | MSE native, HLS + DASH compatible |
-| Streaming protocol | HLS | Widest browser support, simple manifest |
-| Encryption cipher | AES-256-GCM | Authenticated, fast, Seal-recommended |
-| Encryption model | Envelope (Seal + AES) | 1 Seal call per session, not per segment |
-| Key servers | 2-of-3 threshold | Tolerates 1 server failure |
-| Manifest encoding | JSON + Gzip | Human-readable, simple, adequate for <10K segments |
+| Web platform | Next.js + React + TypeScript | SSR, API routes, Sui wallet integration |
+| Transcoding service | Rust (returns chunks to browser, no Walrus key) | Performance-critical ffmpeg; platform never touches SUI |
+| Player SDK | TypeScript (extracted from web app in v0.2) | MSE pipeline: fetch chunk → SourceBuffer → <video> |
+| Chunk format | fMP4 (CMAF) | MSE native, HLS + DASH compatible |
+| Streaming model | Chunk-based (not segment-based) | Walrus blobs are all-or-nothing; chunks replace HLS segments |
+| Protection | Blockchain only (content-addressed, immutable) | v0.2 adds AES-256-GCM + Seal for access control |
+| Manifest encoding | JSON + Gzip | <10 KB for any video size; chunks list is compact |
 | Transcode engine | ffmpeg CLI | Battle-tested, GPU support, all codecs |
 | Player core | HLS.js (extended) | Lightweight, good fMP4 support, easy to extend |
 | Move contracts | Separate package | Upgradeable, clean separation of concerns |

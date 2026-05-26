@@ -31,6 +31,9 @@ dist
 # Debug
 npm-debug.log*
 
+# Rust
+target/
+
 # Misc
 .DS_Store
 *.pem
